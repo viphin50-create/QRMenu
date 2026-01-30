@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Ресторан: Бургер в 3D</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Библиотека Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Библиотека для генерации QR-кода -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; }
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column;
+            z-index: 10;
+            background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(20,20,20,0.9) 100%);
+            transition: opacity 0.5s ease;
+            overflow-y: auto;
+        }
+        #ar-ui {
+            position: absolute;
+            bottom: 30px; width: 100%;
+            display: none; justify-content: center;
+            z-index: 20;
+        }
+        .burger-btn {
+            background: #ff6b6b;
+            color: white;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(255,107,107,0.4);
+            cursor: pointer;
+            border: none;
+            transition: transform 0.2s;
+        }
+        .burger-btn:active { transform: scale(0.95); }
+        canvas { display: block; }
+        
+        #qrcode-container {
+            background: white;
+            padding: 10px;
+            border-radius: 12px;
+            display: inline-block;
+        }
+        
+        /* Скрываем QR на маленьких экранах (телефонах) */
+        @media (max-width: 768px) {
+            #qr-section { display: none; }
+        }
+    </style>
+</head>
+<body class="bg-gray-900">
+
+    <!-- Интерфейс Меню -->
+    <div id="overlay">
+        <header class="p-6 text-white text-center">
+            <h1 class="text-4xl font-extrabold tracking-tight">Chef <span class="text-red-500">AR</span></h1>
+            <p class="text-gray-400 mt-2">Будущее ресторанного меню уже здесь</p>
+        </header>
+
+        <main class="flex-grow flex flex-col md:flex-row items-center justify-center p-6 gap-8">
+            <!-- Карточка товара -->
+            <div id="menu-card" class="bg-white rounded-3xl p-8 shadow-2xl max-w-sm w-full text-center">
+                <div class="mb-4 text-7xl animate-bounce">🍔</div>
+                <h2 class="text-2xl font-bold text-gray-800 mb-2">Классический Бургер</h2>
+                <p class="text-gray-500 mb-8 text-sm">Сочная говядина зернового откорма, плавленный чеддер, маринованные огурчики и секретный соус.</p>
+                <button id="start-ar-btn" class="burger-btn text-lg w-full">
+                    Открыть в AR
+                </button>
+                <p class="text-xs text-gray-400 mt-4 uppercase tracking-widest">Требуется доступ к камере</p>
+            </div>
+
+            <!-- Секция с QR кодом (видна только на десктопе) -->
+            <div id="qr-section" class="text-center text-white bg-white/5 p-8 rounded-3xl border border-white/10 backdrop-blur-md">
+                <p class="mb-4 font-medium">Отсканируйте, чтобы<br>открыть на телефоне:</p>
+                <div id="qrcode-container" class="mx-auto">
+                    <div id="qrcode"></div>
+                </div>
+                <p class="mt-4 text-xs text-gray-400">Наведите камеру смартфона</p>
+            </div>
+        </main>
+    </div>
+
+    <!-- UI во время AR -->
+    <div id="ar-ui">
+        <button id="place-btn" class="burger-btn">Поставить бургер 🍔</button>
+    </div>
+
+    <!-- Инструкция/Ошибки -->
+    <div id="info-box" class="fixed top-6 left-1/2 -translate-x-1/2 bg-white/90 text-gray-900 px-6 py-3 rounded-full text-sm font-bold hidden z-50 shadow-xl">
+        Поиск поверхности...
+    </div>
+
+    <script type="module">
+        let camera = null;
+        let scene = null;
+        let renderer = null;
+        let reticle = null;
+        let hitTestSource = null;
+        let hitTestSourceRequested = false;
+        let burgerModel = null;
+        let arSession = null;
+
+        const startButton = document.getElementById('start-ar-btn');
+        const overlay = document.getElementById('overlay');
+        const arUi = document.getElementById('ar-ui');
+        const placeBtn = document.getElementById('place-btn');
+        const infoBox = document.getElementById('info-box');
+
+        // Генерация QR-кода при загрузке
+        window.onload = function() {
+            new QRCode(document.getElementById("qrcode"), {
+                text: window.location.href,
+                width: 160,
+                height: 160,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+        };
+
+        startButton.addEventListener('click', initAR);
+
+        async function initAR() {
+            if ('xr' in navigator) {
+                try {
+                    const isSupported = await navigator.xr.isSessionSupported('immersive-ar');
+                    if (isSupported) {
+                        const session = await navigator.xr.requestSession('immersive-ar', {
+                            requiredFeatures: ['hit-test'],
+                            optionalFeatures: ['dom-overlay'],
+                            domOverlay: { root: document.body }
+                        });
+                        onSessionStarted(session);
+                    } else {
+                        showError("Ваш браузер не поддерживает AR. Попробуйте Chrome на Android или Safari на iOS 17.6+");
+                    }
+                } catch (e) {
+                    showError("Ошибка: " + e.message);
+                }
+            } else {
+                showError("WebXR не найден. Откройте эту страницу на мобильном устройстве.");
+            }
+        }
+
+        function showError(msg) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = "fixed top-10 left-1/2 -translate-x-1/2 bg-red-600 text-white p-6 rounded-2xl z-[100] shadow-2xl text-center max-w-[90vw]";
+            errorDiv.innerHTML = `<strong>Внимание:</strong><br>${msg}`;
+            document.body.appendChild(errorDiv);
+            setTimeout(() => errorDiv.remove(), 8000);
+        }
+
+        function onSessionStarted(session) {
+            arSession = session;
+            overlay.style.opacity = '0';
+            setTimeout(() => overlay.style.display = 'none', 500);
+            arUi.style.display = 'flex';
+            infoBox.classList.remove('hidden');
+
+            initGraphics();
+            
+            renderer.xr.setReferenceSpaceType('local');
+            renderer.xr.setSession(session);
+
+            session.addEventListener('end', () => {
+                arSession = null;
+                location.reload(); 
+            });
+        }
+
+        function initGraphics() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+            scene.add(light);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 5);
+            scene.add(dirLight);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // Прицел
+            reticle = new THREE.Mesh(
+                new THREE.RingGeometry(0.04, 0.05, 32).rotateX(-Math.PI / 2),
+                new THREE.MeshBasicMaterial({ color: 0xffffff })
+            );
+            reticle.matrixAutoUpdate = false;
+            reticle.visible = false;
+            scene.add(reticle);
+
+            placeBtn.addEventListener('click', () => {
+                if (reticle && reticle.visible) {
+                    const burger = createBurger();
+                    burger.position.setFromMatrixPosition(reticle.matrix);
+                    scene.add(burger);
+                    
+                    // Анимация масштаба
+                    burger.scale.set(0.01, 0.01, 0.01);
+                    let s = 0.01;
+                    const grow = setInterval(() => {
+                        s += 0.05;
+                        burger.scale.set(s, s, s);
+                        if (s >= 1) clearInterval(grow);
+                    }, 16);
+                }
+            });
+
+            renderer.setAnimationLoop(render);
+        }
+
+        function createBurger() {
+            const group = new THREE.Group();
+
+            const bunMat = new THREE.MeshPhongMaterial({ color: 0xD2B48C }); 
+            const meatMat = new THREE.MeshPhongMaterial({ color: 0x4B2E1D }); 
+            const cheeseMat = new THREE.MeshPhongMaterial({ color: 0xFFD700 }); 
+            const lettuceMat = new THREE.MeshPhongMaterial({ color: 0x228B22 }); 
+
+            // Нижняя булка
+            const bBun = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.02, 32), bunMat);
+            bBun.position.y = 0.01;
+            group.add(bBun);
+
+            // Котлета
+            const patty = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.015, 32), meatMat);
+            patty.position.y = 0.03;
+            group.add(patty);
+
+            // Сыр
+            const cheese = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.005, 0.12), cheeseMat);
+            cheese.position.y = 0.04;
+            cheese.rotation.y = Math.PI / 4;
+            group.add(cheese);
+
+            // Салат
+            const lettuce = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.005, 32), lettuceMat);
+            lettuce.position.y = 0.045;
+            group.add(lettuce);
+
+            // Верхняя булка
+            const tBun = new THREE.Mesh(new THREE.SphereGeometry(0.06, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), bunMat);
+            tBun.position.y = 0.05;
+            group.add(tBun);
+
+            return group;
+        }
+
+        function render(timestamp, frame) {
+            if (frame && renderer) {
+                const referenceSpace = renderer.xr.getReferenceSpace();
+                const session = renderer.xr.getSession();
+
+                if (!hitTestSourceRequested) {
+                    session.requestReferenceSpace('viewer').then((ref) => {
+                        session.requestHitTestSource({ space: ref }).then((source) => {
+                            hitTestSource = source;
+                        });
+                    });
+                    hitTestSourceRequested = true;
+                }
+
+                if (hitTestSource) {
+                    const hits = frame.getHitTestResults(hitTestSource);
+                    if (hits.length) {
+                        const hit = hits[0];
+                        reticle.visible = true;
+                        reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+                        infoBox.innerText = "Плоскость найдена!";
+                        infoBox.classList.add('bg-green-500', 'text-white');
+                    } else {
+                        reticle.visible = false;
+                        infoBox.innerText = "Медленно ведите камерой по столу...";
+                        infoBox.classList.remove('bg-green-500', 'text-white');
+                    }
+                }
+                renderer.render(scene, camera);
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            if (camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+    </script>
+</body>
+</html>

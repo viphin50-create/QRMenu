@@ -47,52 +47,66 @@
             display: inline-block;
         }
         
-        /* Скрываем QR на маленьких экранах (телефонах) */
         @media (max-width: 768px) {
             #qr-section { display: none; }
+        }
+
+        .error-modal {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            color: white;
+            padding: 24px;
+            border-radius: 20px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
         }
     </style>
 </head>
 <body class="bg-gray-900">
 
-    <!-- Интерфейс Меню -->
     <div id="overlay">
         <header class="p-6 text-white text-center">
             <h1 class="text-4xl font-extrabold tracking-tight">Chef <span class="text-red-500">AR</span></h1>
-            <p class="text-gray-400 mt-2">Будущее ресторанного меню уже здесь</p>
+            <p class="text-gray-400 mt-2">Виртуальная примерка блюд</p>
         </header>
 
         <main class="flex-grow flex flex-col md:flex-row items-center justify-center p-6 gap-8">
-            <!-- Карточка товара -->
-            <div id="menu-card" class="bg-white rounded-3xl p-8 shadow-2xl max-w-sm w-full text-center">
+            <div id="menu-card" class="bg-white rounded-3xl p-8 shadow-2xl max-w-sm w-full text-center border-4 border-transparent hover:border-red-500 transition-all">
                 <div class="mb-4 text-7xl animate-bounce">🍔</div>
                 <h2 class="text-2xl font-bold text-gray-800 mb-2">Классический Бургер</h2>
-                <p class="text-gray-500 mb-8 text-sm">Сочная говядина зернового откорма, плавленный чеддер, маринованные огурчики и секретный соус.</p>
+                <p class="text-gray-500 mb-8 text-sm">Посмотрите, как этот красавец будет смотреться на вашем столе перед заказом.</p>
                 <button id="start-ar-btn" class="burger-btn text-lg w-full">
-                    Открыть в AR
+                    Посмотреть на столе
                 </button>
-                <p class="text-xs text-gray-400 mt-4 uppercase tracking-widest">Требуется доступ к камере</p>
             </div>
 
-            <!-- Секция с QR кодом (видна только на десктопе) -->
             <div id="qr-section" class="text-center text-white bg-white/5 p-8 rounded-3xl border border-white/10 backdrop-blur-md">
-                <p class="mb-4 font-medium">Отсканируйте, чтобы<br>открыть на телефоне:</p>
+                <p class="mb-4 font-medium italic">Для работы AR сканируйте с телефона:</p>
                 <div id="qrcode-container" class="mx-auto">
                     <div id="qrcode"></div>
                 </div>
-                <p class="mt-4 text-xs text-gray-400">Наведите камеру смартфона</p>
+                <p class="mt-4 text-xs text-gray-400">Требуется HTTPS соединение</p>
             </div>
         </main>
     </div>
 
-    <!-- UI во время AR -->
     <div id="ar-ui">
         <button id="place-btn" class="burger-btn">Поставить бургер 🍔</button>
     </div>
 
-    <!-- Инструкция/Ошибки -->
     <div id="info-box" class="fixed top-6 left-1/2 -translate-x-1/2 bg-white/90 text-gray-900 px-6 py-3 rounded-full text-sm font-bold hidden z-50 shadow-xl">
         Поиск поверхности...
+    </div>
+
+    <div id="error-screen" class="fixed inset-0 bg-black/80 z-[100] hidden items-center justify-center p-6">
+        <div class="error-modal">
+            <h3 class="text-xl font-bold text-red-500 mb-4">WebXR недоступен</h3>
+            <div id="error-text" class="text-gray-300 text-sm space-y-3">
+                <!-- Сюда вставится текст ошибки -->
+            </div>
+            <button onclick="document.getElementById('error-screen').classList.add('hidden')" class="mt-6 w-full bg-white/10 hover:bg-white/20 py-2 rounded-lg transition-colors">Понятно</button>
+        </div>
     </div>
 
     <script type="module">
@@ -111,7 +125,6 @@
         const placeBtn = document.getElementById('place-btn');
         const infoBox = document.getElementById('info-box');
 
-        // Генерация QR-кода при загрузке
         window.onload = function() {
             new QRCode(document.getElementById("qrcode"), {
                 text: window.location.href,
@@ -126,6 +139,14 @@
         startButton.addEventListener('click', initAR);
 
         async function initAR() {
+            const errorScreen = document.getElementById('error-screen');
+            const errorText = document.getElementById('error-text');
+
+            if (!window.isSecureContext) {
+                showEnhancedError("Вы используете незащищенное соединение (HTTP). WebAR требует <strong>HTTPS</strong> для работы камеры.");
+                return;
+            }
+
             if ('xr' in navigator) {
                 try {
                     const isSupported = await navigator.xr.isSessionSupported('immersive-ar');
@@ -137,22 +158,22 @@
                         });
                         onSessionStarted(session);
                     } else {
-                        showError("Ваш браузер не поддерживает AR. Попробуйте Chrome на Android или Safari на iOS 17.6+");
+                        showEnhancedError("Браузер поддерживает WebXR, но режим дополненной реальности (AR) недоступен. Обычно это значит, что на устройстве не установлены AR-сервисы (ARCore/ARKit).");
                     }
                 } catch (e) {
-                    showError("Ошибка: " + e.message);
+                    showEnhancedError("Не удалось запустить AR-сессию: " + e.message);
                 }
             } else {
-                showError("WebXR не найден. Откройте эту страницу на мобильном устройстве.");
+                showEnhancedError("Ваш браузер не знает, что такое WebXR. <br><br>• Если вы на <strong>iPhone</strong>: обновитесь до iOS 17.6+ и используйте Safari.<br>• Если на <strong>Android</strong>: используйте Chrome и убедитесь, что установлены 'Сервисы Google Play для AR'.<br>• Если вы в <strong>предпросмотре</strong>: откройте страницу в отдельной вкладке.");
             }
         }
 
-        function showError(msg) {
-            const errorDiv = document.createElement('div');
-            errorDiv.className = "fixed top-10 left-1/2 -translate-x-1/2 bg-red-600 text-white p-6 rounded-2xl z-[100] shadow-2xl text-center max-w-[90vw]";
-            errorDiv.innerHTML = `<strong>Внимание:</strong><br>${msg}`;
-            document.body.appendChild(errorDiv);
-            setTimeout(() => errorDiv.remove(), 8000);
+        function showEnhancedError(html) {
+            const errorScreen = document.getElementById('error-screen');
+            const errorText = document.getElementById('error-text');
+            errorText.innerHTML = html;
+            errorScreen.classList.remove('hidden');
+            errorScreen.classList.add('flex');
         }
 
         function onSessionStarted(session) {
@@ -190,7 +211,6 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            // Прицел
             reticle = new THREE.Mesh(
                 new THREE.RingGeometry(0.04, 0.05, 32).rotateX(-Math.PI / 2),
                 new THREE.MeshBasicMaterial({ color: 0xffffff })
@@ -205,7 +225,6 @@
                     burger.position.setFromMatrixPosition(reticle.matrix);
                     scene.add(burger);
                     
-                    // Анимация масштаба
                     burger.scale.set(0.01, 0.01, 0.01);
                     let s = 0.01;
                     const grow = setInterval(() => {
@@ -221,34 +240,28 @@
 
         function createBurger() {
             const group = new THREE.Group();
-
             const bunMat = new THREE.MeshPhongMaterial({ color: 0xD2B48C }); 
             const meatMat = new THREE.MeshPhongMaterial({ color: 0x4B2E1D }); 
             const cheeseMat = new THREE.MeshPhongMaterial({ color: 0xFFD700 }); 
             const lettuceMat = new THREE.MeshPhongMaterial({ color: 0x228B22 }); 
 
-            // Нижняя булка
             const bBun = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.02, 32), bunMat);
             bBun.position.y = 0.01;
             group.add(bBun);
 
-            // Котлета
             const patty = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.015, 32), meatMat);
             patty.position.y = 0.03;
             group.add(patty);
 
-            // Сыр
             const cheese = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.005, 0.12), cheeseMat);
             cheese.position.y = 0.04;
             cheese.rotation.y = Math.PI / 4;
             group.add(cheese);
 
-            // Салат
             const lettuce = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.005, 32), lettuceMat);
             lettuce.position.y = 0.045;
             group.add(lettuce);
 
-            // Верхняя булка
             const tBun = new THREE.Mesh(new THREE.SphereGeometry(0.06, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), bunMat);
             tBun.position.y = 0.05;
             group.add(tBun);
@@ -280,7 +293,7 @@
                         infoBox.classList.add('bg-green-500', 'text-white');
                     } else {
                         reticle.visible = false;
-                        infoBox.innerText = "Медленно ведите камерой по столу...";
+                        infoBox.innerText = "Поиск стола...";
                         infoBox.classList.remove('bg-green-500', 'text-white');
                     }
                 }
